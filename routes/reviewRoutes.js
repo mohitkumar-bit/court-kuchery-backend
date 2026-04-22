@@ -1,0 +1,10 @@
+const express = require("express");
+const router = express.Router();
+
+const authMiddleware = require("../middleware/authMiddleware");
+const { createReview, getLawyerReviews } = require("../controllers/reviewController");
+
+router.post("/", authMiddleware, createReview);
+router.get("/:lawyerId", getLawyerReviews);
+
+module.exports = router;
