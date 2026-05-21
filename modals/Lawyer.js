@@ -28,7 +28,7 @@ const lawyerSchema = new mongoose.Schema(
 
     specialization: {
       type: [String],
-      enum: ["criminal", "family", "corporate", "civil", "property"],
+      enum: ["criminal", "family", "corporate", "civil", "property", "cyber"],
       required: false,
     },
     

@@ -114,11 +114,51 @@ const getAdminDashboardStats = async (req, res) => {
     }
 };
 
+const isGeoLike = (value) =>
+    value &&
+    typeof value === "object" &&
+    typeof value.type === "string";
+
+const formatLawyerLocationLabel = (lawyer) => {
+    const parts = [];
+    const address =
+        typeof lawyer.address === "string" && !isGeoLike(lawyer.address)
+            ? lawyer.address.trim()
+            : "";
+    if (address) parts.push(address);
+    const region = [lawyer.district, lawyer.state].filter(Boolean).join(", ");
+    if (region) parts.push(region);
+    if (parts.length > 0) return parts.join(" · ");
+
+    const coords = lawyer.location?.coordinates;
+    if (Array.isArray(coords) && coords.length >= 2) {
+        const [lng, lat] = coords;
+        return `${lat.toFixed(4)}°, ${lng.toFixed(4)}°`;
+    }
+    return "Not provided";
+};
+
+const normalizeCourtType = (courtType) => {
+    if (Array.isArray(courtType)) return courtType;
+    if (typeof courtType === "string" && courtType.trim()) return [courtType.trim()];
+    return [];
+};
+
+const sanitizeLawyerForAdmin = (lawyer) => {
+    const { location, ...rest } = lawyer;
+    return {
+        ...rest,
+        courtType: normalizeCourtType(lawyer.courtType),
+        locationLabel: formatLawyerLocationLabel(lawyer),
+    };
+};
+
 /* LAWYER MANAGEMENT */
 const getAllLawyersAdmin = async (req, res) => {
     try {
-        const lawyers = await Lawyer.find().sort({ createdAt: -1 });
-        res.status(200).json({ success: true, lawyers });
+        const lawyers = await Lawyer.find().sort({ createdAt: -1 }).lean();
+        const lawyersForAdmin = lawyers.map(sanitizeLawyerForAdmin);
+        res.status(200).json({ success: true, lawyers: lawyersForAdmin });
     } catch (error) {
         res.status(500).json({ message: "Server error" });
     }

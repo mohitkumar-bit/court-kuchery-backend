@@ -249,7 +249,9 @@ const getLawyers = async (req, res) => {
 
       // Add common filters
       const filterMatch = {};
-      if (specialization) filterMatch.specialization = specialization;
+      if (specialization) {
+        filterMatch.specialization = String(specialization).toLowerCase().trim();
+      }
       if (courtType) filterMatch.courtType = { $in: courtType.split(",") };
       if (minPrice || maxPrice) {
         filterMatch.ratePerMinute = {};
@@ -495,6 +497,20 @@ const completeLawyerProfile = async (req, res) => {
       return res.status(400).json({ message: "All professional and bank details are required" });
     }
 
+    const normalizedCourtType = Array.isArray(courtType)
+      ? courtType
+      : typeof courtType === "string" && courtType.trim()
+        ? [courtType.trim()]
+        : undefined;
+
+    const validLocation =
+      location &&
+      location.type === "Point" &&
+      Array.isArray(location.coordinates) &&
+      location.coordinates.length === 2
+        ? location
+        : undefined;
+
     const lawyer = await Lawyer.findByIdAndUpdate(
       lawyerId,
       {
@@ -505,9 +521,9 @@ const completeLawyerProfile = async (req, res) => {
         barCouncilId,
         barCouncilIdPhoto,
         bankDetails,
-        courtType,
+        courtType: normalizedCourtType,
         profileCompleted: true,
-        location,
+        ...(validLocation ? { location: validLocation } : {}),
         address,
         district,
         state,
@@ -538,20 +554,37 @@ const updateLawyerProfile = async (req, res) => {
     const lawyerId = req.user.id;
     const { name, bio, specialization, ratePerMinute, experienceYears, phone, courtType, location, address, district, state } = req.body;
 
+    const normalizedCourtType = Array.isArray(courtType)
+      ? courtType
+      : typeof courtType === "string" && courtType.trim()
+        ? [courtType.trim()]
+        : undefined;
+
+    const validLocation =
+      location &&
+      location.type === "Point" &&
+      Array.isArray(location.coordinates) &&
+      location.coordinates.length === 2
+        ? location
+        : undefined;
+
+    const updateFields = {
+      name,
+      bio,
+      specialization,
+      ratePerMinute,
+      experienceYears,
+      phone,
+      address,
+      district,
+      state,
+    };
+    if (normalizedCourtType) updateFields.courtType = normalizedCourtType;
+    if (validLocation) updateFields.location = validLocation;
+
     const lawyer = await Lawyer.findByIdAndUpdate(
       lawyerId,
-      {
-        name,
-        bio,
-        specialization,
-        ratePerMinute,
-        experienceYears,
-        courtType,
-        location,
-        address,
-        district,
-        state,
-      },
+      updateFields,
       { new: true }
     );
 
