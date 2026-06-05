@@ -131,6 +131,14 @@ const lawyerSchema = new mongoose.Schema(
       type: String,
       required: false,
     },
+
+    expoPushTokens: [
+      {
+        token: { type: String, required: true },
+        platform: { type: String, default: "unknown" },
+        updatedAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   {
     timestamps: true,

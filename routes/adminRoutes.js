@@ -21,6 +21,14 @@ const {
     getAllEarningsAdmin,
 } = require("../controllers/adminController");
 const { verifyLawyer } = require("../controllers/lawyerController");
+const {
+    getNotificationTemplates,
+    createNotificationTemplate,
+    updateNotificationTemplate,
+    deleteNotificationTemplate,
+    sendAdminPushNotification,
+    getPushCampaignHistory,
+} = require("../controllers/notificationController");
 
 router.use(authMiddleware, adminMiddleware);
 
@@ -41,5 +49,12 @@ router.get("/reviews", getAllReviewsAdmin);
 router.delete("/reviews/:reviewId", deleteReviewAdmin);
 router.get("/settings", getSystemSettings);
 router.patch("/settings", updateSystemSettings);
+
+router.get("/notification-templates", getNotificationTemplates);
+router.post("/notification-templates", createNotificationTemplate);
+router.patch("/notification-templates/:templateId", updateNotificationTemplate);
+router.delete("/notification-templates/:templateId", deleteNotificationTemplate);
+router.post("/notifications/send", sendAdminPushNotification);
+router.get("/notifications/history", getPushCampaignHistory);
 
 module.exports = router;

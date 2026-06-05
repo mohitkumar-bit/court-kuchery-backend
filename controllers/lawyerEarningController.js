@@ -97,3 +97,6 @@ const getLawyerEarnings = async (req, res) => {
 
 
 module.exports = { getLawyerEarnings };
+
+
+                                                        

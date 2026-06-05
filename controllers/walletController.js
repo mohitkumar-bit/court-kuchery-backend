@@ -1,6 +1,7 @@
 const User = require("../modals/authModal");
 const Lawyer = require("../modals/Lawyer");
 const WalletTransaction = require("../modals/WalletTransaction");
+const { getAggregatedWalletTransactions } = require("../utils/consultWalletTxn");
 
 /* GET WALLET BALANCE */
 const getWalletBalance = async (req, res) => {
@@ -31,10 +32,7 @@ const getWalletBalance = async (req, res) => {
 /* GET WALLET TRANSACTIONS */
 const getWalletTransactions = async (req, res) => {
   try {
-    const transactions = await WalletTransaction.find({
-      userId: req.user.id,
-    }).sort({ createdAt: -1 });
-
+    const transactions = await getAggregatedWalletTransactions(req.user.id);
     res.status(200).json({ transactions });
   } catch (error) {
     console.error("WALLET TRANSACTIONS ERROR 👉", error);

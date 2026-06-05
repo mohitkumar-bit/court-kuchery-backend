@@ -14,13 +14,27 @@ const {
   getLawyerStats,
   withdrawFunds,
   completeLawyerProfile,
-  updateLawyerProfile
+  updateLawyerProfile,
+  changeLawyerPassword,
 } = require("../controllers/lawyerController");
 const adminMiddleware = require("../middleware/adminMiddleware");
+const {
+  registerLawyerPushToken,
+  getLawyerNotifications,
+  getLawyerUnreadCount,
+  markLawyerNotificationRead,
+  markLawyerNotificationsRead,
+} = require("../controllers/notificationController");
 
 router.post("/register", registerLawyer);
 router.get("/me", authMiddleware, getLawyerProfile);
+router.post("/push-token", authMiddleware, registerLawyerPushToken);
+router.get("/notifications", authMiddleware, getLawyerNotifications);
+router.get("/notifications/unread-count", authMiddleware, getLawyerUnreadCount);
+router.patch("/notifications/read-all", authMiddleware, markLawyerNotificationsRead);
+router.patch("/notifications/:notificationId/read", authMiddleware, markLawyerNotificationRead);
 router.patch("/me/update", authMiddleware, updateLawyerProfile);
+router.patch("/change-password", authMiddleware, changeLawyerPassword);
 router.get("/stats", authMiddleware, getLawyerStats);
 router.get("/", getLawyers);
 router.get("/:lawyerId", getLawyerById);

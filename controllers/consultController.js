@@ -1,7 +1,6 @@
 const Lawyer = require("../modals/Lawyer");
 const User = require("../modals/authModal");
 const ConsultSession = require("../modals/consultSession");
-const WalletTransaction = require("../modals/WalletTransaction");
 const LawyerEarning = require("../modals/LawyerEarning");
 const SystemSettings = require("../modals/SystemSettings");
 const mongoose = require("mongoose");
@@ -9,6 +8,7 @@ const { RtcTokenBuilder, RtcRole } = require("agora-token");
 
 const { sessions } = require("../utils/sessionBilling");
 const { acquireLock, releaseLock } = require("../utils/lock");
+const { addConsultationDebit } = require("../utils/consultWalletTxn");
 
 const MIN_BALANCE = 15;
 const BILLING_INTERVAL = 10000; // 10 seconds
@@ -250,15 +250,8 @@ const startBillingInterval = (io, session) => {
           { new: true }
         );
 
-        if (finalUser) {
-          await WalletTransaction.create({
-            userId,
-            type: "DEBIT",
-            amount: remaining,
-            reason: "CONSULTATION",
-            referenceId: sessionIdStr,
-            balanceAfter: 0,
-          });
+        if (finalUser && remaining > 0) {
+          await addConsultationDebit(userId, sessionIdStr, remaining, 0);
           freshSession.totalAmount += remaining;
         }
 
@@ -274,15 +267,13 @@ const startBillingInterval = (io, session) => {
         return;
       }
 
-      // 3. Record Transaction & Update Session Total
-      await WalletTransaction.create({
+      // 3. One wallet row per consultation (accumulates each billing tick)
+      await addConsultationDebit(
         userId,
-        type: "DEBIT",
-        amount: deduction,
-        reason: "CONSULTATION",
-        referenceId: sessionIdStr,
-        balanceAfter: updatedUser.walletBalance,
-      });
+        sessionIdStr,
+        deduction,
+        updatedUser.walletBalance
+      );
 
       freshSession.totalAmount += deduction;
       await freshSession.save();

@@ -1,4 +1,8 @@
-require("dotenv").config();
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
+
+const phonepe = require("./services/phonepeService");
+
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
@@ -62,4 +66,12 @@ const PORT = process.env.PORT || 4000;
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  if (phonepe.isPhonePeConfigured()) {
+    console.log("✅ PhonePe payment gateway configured (SANDBOX/PRODUCTION)");
+    console.log(`   Callback base: ${process.env.PHONEPE_CALLBACK_BASE_URL}`);
+  } else {
+    console.warn(
+      "⚠️ PhonePe NOT configured — wallet recharge will return 503. Add PHONEPE_* vars to .env and restart."
+    );
+  }
 });
