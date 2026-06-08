@@ -13,6 +13,7 @@ const {
   getLawyerProfile,
   getLawyerStats,
   withdrawFunds,
+  getLawyerPayouts,
   completeLawyerProfile,
   updateLawyerProfile,
   changeLawyerPassword,
@@ -43,6 +44,7 @@ router.patch("/:lawyerId/verify", authMiddleware, adminMiddleware, verifyLawyer)
 router.post("/login", lawyerLogin);
 router.post("/logout", authMiddleware, lawyerLogout);
 router.post("/refresh", refreshLawyerAccessToken);
+router.get("/payouts", authMiddleware, getLawyerPayouts);
 router.post("/withdraw", authMiddleware, withdrawFunds);
 router.post("/complete-profile", authMiddleware, completeLawyerProfile);
 

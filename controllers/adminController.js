@@ -5,6 +5,7 @@ const LawyerEarning = require("../modals/LawyerEarning");
 const Review = require("../modals/Review");
 const SystemSettings = require("../modals/SystemSettings");
 const Payout = require("../modals/Payout");
+const WalletTransaction = require("../modals/WalletTransaction");
 const mongoose = require("mongoose");
 
 /* GET ADMIN DASHBOARD STATS */
@@ -367,7 +368,7 @@ const getRevenueStats = async (req, res) => {
 const getAllPayoutsAdmin = async (req, res) => {
     try {
         const payouts = await Payout.find()
-            .populate("lawyerId", "name email")
+            .populate("lawyerId", "name email phone bankDetails")
             .sort({ createdAt: -1 });
         res.status(200).json({ success: true, payouts });
     } catch (error) {
@@ -391,27 +392,31 @@ const updatePayoutStatus = async (req, res) => {
         const payout = await Payout.findById(payoutId);
         if (!payout) return res.status(404).json({ message: "Payout record not found" });
 
-        // Update status
-        payout.status = status;
-        if (status === 'PAID') {
+        const previousStatus = payout.status;
+
+        if (status === "PAID" && previousStatus !== "PAID") {
+            payout.status = "PAID";
             payout.paidAt = new Date();
             if (razorpayPayoutId) payout.razorpayPayoutId = razorpayPayoutId;
-        }
-
-        // If FAILED, we should ideally refund the availableBalance to the lawyer
-        if (status === 'FAILED' && payout.status !== 'FAILED') {
-            await Lawyer.findByIdAndUpdate(payout.lawyerId, {
-                $inc: { availableBalance: payout.amount }
-            });
-            // Also record a reversal transaction
+        } else if (status === "FAILED" && previousStatus === "PENDING") {
+            payout.status = "FAILED";
+            const lawyer = await Lawyer.findByIdAndUpdate(
+                payout.lawyerId,
+                { $inc: { availableBalance: payout.amount } },
+                { new: true }
+            );
             await WalletTransaction.create({
                 userId: payout.lawyerId,
                 type: "CREDIT",
                 amount: payout.amount,
                 reason: "REFUND",
-                referenceId: `PAYOUT_FAILED:${payout._id}`,
-                balanceAfter: 0 // Placeholder, we should fetch actual balance if we need balanceAfter accuracy
+                referenceId: `PAYOUT_REJECTED:${payout._id}`,
+                balanceAfter: lawyer?.availableBalance ?? 0,
             });
+        } else if (status === "PENDING") {
+            payout.status = "PENDING";
+        } else {
+            return res.status(400).json({ message: "Invalid status transition" });
         }
 
         await payout.save();

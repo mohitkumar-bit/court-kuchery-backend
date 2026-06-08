@@ -8,6 +8,7 @@ const {
 } = require("../utils/jwt");
 const Payout = require("../modals/Payout");
 const WalletTransaction = require("../modals/WalletTransaction");
+const SystemSettings = require("../modals/SystemSettings");
 const mongoose = require("mongoose");
 const { acquireLock, releaseLock } = require("../utils/lock");
 
@@ -416,7 +417,7 @@ const getLawyerStats = async (req, res) => {
   }
 };
 
-/* WITHDRAW FUNDS */
+/* REQUEST WITHDRAWAL — admin pays manually via bank transfer */
 const withdrawFunds = async (req, res) => {
   const lawyerId = req.user.id;
   const { amount } = req.body;
@@ -425,10 +426,18 @@ const withdrawFunds = async (req, res) => {
     return res.status(400).json({ message: "Invalid withdrawal amount" });
   }
 
+  const settings = await SystemSettings.findOne();
+  const minWithdrawal = settings?.minWithdrawalAmount ?? 500;
+  if (amount < minWithdrawal) {
+    return res.status(400).json({
+      message: `Minimum withdrawal request is ₹${minWithdrawal}`,
+    });
+  }
+
   const lockKey = `withdraw_lock:${lawyerId}`;
   const hasLock = await acquireLock(lockKey, 30);
   if (!hasLock) {
-    return res.status(429).json({ message: "Withdrawal in progress. Please wait." });
+    return res.status(429).json({ message: "A withdrawal request is already being processed. Please wait." });
   }
 
   const session = await mongoose.startSession();
@@ -436,6 +445,32 @@ const withdrawFunds = async (req, res) => {
 
   try {
     const lawyer = await Lawyer.findById(lawyerId).session(session);
+    if (!lawyer) {
+      await session.abortTransaction();
+      await releaseLock(lockKey);
+      return res.status(404).json({ message: "Lawyer not found" });
+    }
+
+    const bank = lawyer.bankDetails || {};
+    if (!bank.accountNumber || !bank.ifscCode || !bank.accountHolder) {
+      await session.abortTransaction();
+      await releaseLock(lockKey);
+      return res.status(400).json({
+        message: "Add your bank details in profile before requesting a withdrawal.",
+      });
+    }
+
+    const existingPending = await Payout.findOne({
+      lawyerId,
+      status: "PENDING",
+    }).session(session);
+    if (existingPending) {
+      await session.abortTransaction();
+      await releaseLock(lockKey);
+      return res.status(400).json({
+        message: "You already have a pending withdrawal request. Wait for admin approval.",
+      });
+    }
 
     if (lawyer.availableBalance < amount) {
       await session.abortTransaction();
@@ -443,48 +478,65 @@ const withdrawFunds = async (req, res) => {
       return res.status(400).json({ message: "Insufficient available balance" });
     }
 
-    // 1. Decrement available balance
     lawyer.availableBalance -= amount;
     await lawyer.save({ session });
 
-    // 2. Create withdrawal record (LEDGER)
-    await WalletTransaction.create([{
-      userId: lawyerId, // In this context, userId is the lawyer
-      type: "DEBIT",
-      amount,
-      reason: "LAWYER_WITHDRAWAL",
-      balanceAfter: lawyer.availableBalance,
-      referenceId: "WITHDRAWAL_PENDING"
-    }], { session });
+    const payout = await Payout.create(
+      [
+        {
+          lawyerId,
+          amount,
+          status: "PENDING",
+        },
+      ],
+      { session }
+    );
 
-    // 3. Create Payout record (Automated/Immediate)
-    const isDummy = process.env.PAYMENT_MODE === "DUMMY";
-    const payoutStatus = isDummy ? "PAID" : "PENDING";
-    const paidAt = isDummy ? new Date() : null;
+    const payoutId = payout[0]._id.toString();
 
-    const payout = await Payout.create([{
-      lawyerId,
-      amount,
-      status: payoutStatus,
-      paidAt
-    }], { session });
+    await WalletTransaction.create(
+      [
+        {
+          userId: lawyerId,
+          type: "DEBIT",
+          amount,
+          reason: "LAWYER_WITHDRAWAL",
+          balanceAfter: lawyer.availableBalance,
+          referenceId: `PAYOUT_REQUEST:${payoutId}`,
+        },
+      ],
+      { session }
+    );
 
     await session.commitTransaction();
     await releaseLock(lockKey);
 
     res.status(200).json({
       success: true,
-      message: "Withdrawal request submitted successfully",
-      payout: payout[0]
+      message:
+        "Withdrawal request submitted. Admin will transfer funds to your bank account manually.",
+      payout: payout[0],
     });
-
   } catch (error) {
     await session.abortTransaction();
     await releaseLock(lockKey);
-    console.error("WITHDRAWAL ERROR 👉", error);
+    console.error("WITHDRAWAL REQUEST ERROR 👉", error);
     res.status(500).json({ message: "Server error" });
   } finally {
     session.endSession();
+  }
+};
+
+const getLawyerPayouts = async (req, res) => {
+  try {
+    const payouts = await Payout.find({ lawyerId: req.user.id })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+    res.status(200).json({ success: true, payouts });
+  } catch (error) {
+    console.error("GET LAWYER PAYOUTS ERROR 👉", error);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -678,6 +730,7 @@ module.exports = {
   getLawyerProfile,
   getLawyerStats,
   withdrawFunds,
+  getLawyerPayouts,
   completeLawyerProfile,
   updateLawyerProfile,
   changeLawyerPassword,
