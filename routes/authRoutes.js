@@ -8,6 +8,8 @@ const {
   getProfile,
   updateProfile,
   changePassword,
+  sendSignupOtp,
+  verifySignupOtp,
 } = require("../controllers/authController");
 const authMiddleware = require("../middleware/authMiddleware");
 const {
@@ -29,6 +31,8 @@ router.patch("/notifications/read-all", authMiddleware, markClientNotificationsR
 router.patch("/notifications/:notificationId/read", authMiddleware, markClientNotificationRead);
 router.post("/register", register);
 router.post("/login", login);
+router.post("/otp/send", sendSignupOtp);
+router.post("/otp/verify", verifySignupOtp);
 router.post("/logout", authMiddleware, logout);
 router.post("/refresh", refreshAccessToken);
 

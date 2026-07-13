@@ -77,6 +77,12 @@ const lawyerSchema = new mongoose.Schema(
       default: false,
     },
 
+    // Existing lawyers default verified; new signups set false until OTP
+    isPhoneVerified: {
+      type: Boolean,
+      default: true,
+    },
+
     isBlocked: {
       type: Boolean,
       default: false,

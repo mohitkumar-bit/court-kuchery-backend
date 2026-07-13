@@ -11,7 +11,54 @@ const WalletTransaction = require("../modals/WalletTransaction");
 const SystemSettings = require("../modals/SystemSettings");
 const mongoose = require("mongoose");
 const { acquireLock, releaseLock } = require("../utils/lock");
+const {
+  createAndSendOtp,
+  verifyOtpCode,
+  normalizePhone,
+} = require("../services/otpService");
 
+const LAWYER_OTP_PURPOSE = "LAWYER_SIGNUP";
+
+async function findLawyerByPhone(phone10) {
+  return Lawyer.findOne({
+    $or: [
+      { phone: phone10 },
+      { phone: `+91${phone10}` },
+      { phone: `91${phone10}` },
+      { phone: `0${phone10}` },
+    ],
+  }).select("+password");
+}
+
+async function issueLawyerTokens(lawyer) {
+  const accessToken = generateAccessToken({
+    id: lawyer._id,
+    role: "LAWYER",
+  });
+  const refreshToken = generateRefreshToken({
+    id: lawyer._id,
+    role: "LAWYER",
+  });
+
+  lawyer.refreshToken = refreshToken;
+  lawyer.isOnline = true;
+  await lawyer.save();
+
+  return {
+    accessToken,
+    refreshToken,
+    lawyer: {
+      id: lawyer._id,
+      name: lawyer.name,
+      email: lawyer.email,
+      phone: lawyer.phone,
+      profileCompleted: lawyer.profileCompleted,
+      isOnline: lawyer.isOnline,
+      courtType: lawyer.courtType,
+      isPhoneVerified: lawyer.isPhoneVerified,
+    },
+  };
+}
 
 /* REGISTER LAWYER */
 const registerLawyer = async (req, res) => {
@@ -22,8 +69,49 @@ const registerLawyer = async (req, res) => {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
-    const existing = await Lawyer.findOne({ email });
+    const normalizedPhone = normalizePhone(phone);
+    if (!normalizedPhone) {
+      return res.status(400).json({ message: "Valid 10-digit phone number is required" });
+    }
+
+    const existing = await Lawyer.findOne({
+      $or: [
+        { email: String(email).toLowerCase().trim() },
+        { phone: normalizedPhone },
+        { phone: `+91${normalizedPhone}` },
+        { phone: `91${normalizedPhone}` },
+      ],
+    });
+
     if (existing) {
+      if (!existing.isPhoneVerified) {
+        const sameEmail =
+          existing.email === String(email).toLowerCase().trim();
+        const samePhone = normalizePhone(existing.phone) === normalizedPhone;
+
+        if (sameEmail && samePhone) {
+          try {
+            await createAndSendOtp(normalizedPhone, LAWYER_OTP_PURPOSE);
+          } catch (smsErr) {
+            if (smsErr.statusCode === 429) {
+              return res.status(429).json({ message: smsErr.message });
+            }
+            console.error("LAWYER RESEND OTP ERROR 👉", smsErr.message, smsErr.details || "");
+            return res.status(smsErr.statusCode || 500).json({
+              message: smsErr.message || "Failed to send OTP",
+              needsVerification: true,
+              phone: normalizedPhone,
+            });
+          }
+
+          return res.status(200).json({
+            message: "Account pending verification. OTP sent to your phone.",
+            needsVerification: true,
+            phone: normalizedPhone,
+          });
+        }
+      }
+
       return res.status(400).json({ message: "Lawyer already exists" });
     }
 
@@ -32,38 +120,132 @@ const registerLawyer = async (req, res) => {
     const lawyer = await Lawyer.create({
       name,
       email,
-      phone,
+      phone: normalizedPhone,
       password: hashedPassword,
-      isVerified: false, // Default
+      isVerified: false,
+      isPhoneVerified: false,
       profileCompleted: false,
     });
 
-    const accessToken = generateAccessToken({
-      id: lawyer._id,
-      role: "LAWYER",
-    });
-
-    const refreshToken = generateRefreshToken({
-      id: lawyer._id,
-      role: "LAWYER",
-    });
-
-    lawyer.refreshToken = refreshToken;
-    await lawyer.save();
+    try {
+      await createAndSendOtp(normalizedPhone, LAWYER_OTP_PURPOSE);
+    } catch (smsErr) {
+      console.error("LAWYER SIGNUP OTP SEND ERROR 👉", smsErr.message, smsErr.details || "");
+      return res.status(201).json({
+        message:
+          "Account created, but OTP could not be sent. Please tap Resend OTP.",
+        needsVerification: true,
+        phone: normalizedPhone,
+        otpError: smsErr.message,
+        lawyer: {
+          id: lawyer._id,
+          name: lawyer.name,
+          email: lawyer.email,
+          phone: lawyer.phone,
+          profileCompleted: lawyer.profileCompleted,
+        },
+      });
+    }
 
     res.status(201).json({
-      message: "Lawyer registered. Please complete your profile.",
+      message: "Account created. Please verify the OTP sent to your phone.",
+      needsVerification: true,
+      phone: normalizedPhone,
       lawyer: {
         id: lawyer._id,
         name: lawyer.name,
         email: lawyer.email,
+        phone: lawyer.phone,
         profileCompleted: lawyer.profileCompleted,
       },
-      accessToken,
-      refreshToken,
     });
   } catch (error) {
     console.error("REGISTER LAWYER ERROR 👉", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+const sendLawyerSignupOtp = async (req, res) => {
+  try {
+    const phone = normalizePhone(req.body.phone);
+    const purpose =
+      String(req.body.purpose || "LAWYER_SIGNUP").toUpperCase() === "LAWYER_LOGIN" ||
+      String(req.body.purpose || "").toUpperCase() === "LOGIN"
+        ? "LAWYER_LOGIN"
+        : "LAWYER_SIGNUP";
+
+    if (!phone) {
+      return res.status(400).json({ message: "Valid 10-digit phone number is required" });
+    }
+
+    const lawyer = await findLawyerByPhone(phone);
+    if (!lawyer) {
+      return res.status(404).json({
+        message: "No account found with this phone number. Please sign up first.",
+      });
+    }
+    if (lawyer.isBlocked) {
+      return res.status(403).json({ message: "Account is blocked" });
+    }
+    if (purpose === "LAWYER_SIGNUP" && lawyer.isPhoneVerified) {
+      return res.status(400).json({ message: "Phone already verified. Please login." });
+    }
+
+    const result = await createAndSendOtp(phone, purpose);
+    res.status(200).json({
+      success: true,
+      message: "OTP sent successfully",
+      phone: result.phone,
+      purpose,
+      expiresInSeconds: result.expiresInSeconds,
+    });
+  } catch (error) {
+    console.error("SEND LAWYER OTP ERROR 👉", error.message, error.details || "");
+    res.status(error.statusCode || 500).json({
+      message: error.message || "Failed to send OTP. Please try again.",
+    });
+  }
+};
+
+const verifyLawyerSignupOtp = async (req, res) => {
+  try {
+    const phone = normalizePhone(req.body.phone);
+    const otp = String(req.body.otp || "").trim();
+    const purpose =
+      String(req.body.purpose || "LAWYER_SIGNUP").toUpperCase() === "LAWYER_LOGIN" ||
+      String(req.body.purpose || "").toUpperCase() === "LOGIN"
+        ? "LAWYER_LOGIN"
+        : "LAWYER_SIGNUP";
+
+    try {
+      await verifyOtpCode(phone, otp, purpose);
+    } catch (verifyErr) {
+      return res.status(verifyErr.statusCode || 400).json({
+        message: verifyErr.message || "Invalid OTP",
+      });
+    }
+
+    const lawyer = await findLawyerByPhone(phone);
+    if (!lawyer) {
+      return res.status(404).json({ message: "Lawyer not found" });
+    }
+    if (lawyer.isBlocked) {
+      return res.status(403).json({ message: "Account is blocked" });
+    }
+
+    lawyer.isPhoneVerified = true;
+    lawyer.phone = phone;
+    const tokens = await issueLawyerTokens(lawyer);
+
+    res.status(200).json({
+      message:
+        purpose === "LAWYER_LOGIN"
+          ? "Login successful"
+          : "Phone verified successfully",
+      ...tokens,
+    });
+  } catch (error) {
+    console.error("VERIFY LAWYER OTP ERROR 👉", error);
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -127,67 +309,45 @@ const verifyLawyer = async (req, res) => {
 };
 
 const lawyerLogin = async (req, res) => {
-  console.log("login-lawyer");
   try {
-    const { email, password } = req.body;
-    console.log(email, password);
+    const phone = normalizePhone(req.body.phone);
+    const { password } = req.body;
 
-
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email and password required" });
+    if (!phone || !password) {
+      return res.status(400).json({ message: "Phone and password required" });
     }
 
-    const lawyer = await Lawyer.findOne({ email }).select("+password");
-
-    console.log(lawyer);
+    const lawyer = await findLawyerByPhone(phone);
 
     if (!lawyer) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      return res.status(401).json({ message: "Invalid phone or password" });
     }
-
-    // if (!lawyer.isVerified) {
-    //   return res
-    //     .status(403)
-    //     .json({ message: "Lawyer not verified yet" });
-    // }
 
     if (lawyer.isBlocked) {
       return res.status(403).json({ message: "Account is blocked" });
     }
 
     const isMatch = await bcrypt.compare(password, lawyer.password);
-    console.log(isMatch);
-
     if (!isMatch) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      return res.status(401).json({ message: "Invalid phone or password" });
     }
 
-    const accessToken = generateAccessToken({
-      id: lawyer._id,
-      role: "LAWYER",
-    });
-
-    const refreshToken = generateRefreshToken({
-      id: lawyer._id,
-      role: "LAWYER",
-    });
-
-    lawyer.refreshToken = refreshToken;
-    lawyer.isOnline = true; // Auto set online on login
-    await lawyer.save();
+    try {
+      await createAndSendOtp(phone, "LAWYER_LOGIN");
+    } catch (smsErr) {
+      if (smsErr.statusCode === 429) {
+        return res.status(429).json({ message: smsErr.message });
+      }
+      console.error("LAWYER LOGIN OTP SEND ERROR 👉", smsErr.message, smsErr.details || "");
+      return res.status(500).json({
+        message: smsErr.message || "Failed to send login OTP",
+      });
+    }
 
     res.status(200).json({
-      message: "Lawyer login successful",
-      lawyer: {
-        id: lawyer._id,
-        name: lawyer.name,
-        email: lawyer.email,
-        profileCompleted: lawyer.profileCompleted,
-        isOnline: lawyer.isOnline,
-        courtType: lawyer.courtType,
-      },
-      accessToken,
-      refreshToken,
+      message: "OTP sent to your phone. Please verify to continue.",
+      needsOtp: true,
+      phone,
     });
   } catch (error) {
     console.error("LAWYER LOGIN ERROR 👉", error);
@@ -720,6 +880,8 @@ const changeLawyerPassword = async (req, res) => {
 
 module.exports = {
   registerLawyer,
+  sendLawyerSignupOtp,
+  verifyLawyerSignupOtp,
   getLawyers,
   getLawyerById,
   updateAvailability,

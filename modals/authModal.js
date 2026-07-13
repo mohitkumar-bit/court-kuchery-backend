@@ -51,6 +51,12 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
 
+    // Existing accounts default to verified; new signups set this to false
+    isPhoneVerified: {
+      type: Boolean,
+      default: true,
+    },
+
     lastLoginAt: {
       type: Date,
     },

@@ -3,6 +3,8 @@ const router = express.Router();
 const authMiddleware = require("../middleware/authMiddleware");
 const {
   registerLawyer,
+  sendLawyerSignupOtp,
+  verifyLawyerSignupOtp,
   getLawyers,
   getLawyerById,
   updateAvailability,
@@ -28,6 +30,8 @@ const {
 } = require("../controllers/notificationController");
 
 router.post("/register", registerLawyer);
+router.post("/otp/send", sendLawyerSignupOtp);
+router.post("/otp/verify", verifyLawyerSignupOtp);
 router.get("/me", authMiddleware, getLawyerProfile);
 router.post("/push-token", authMiddleware, registerLawyerPushToken);
 router.get("/notifications", authMiddleware, getLawyerNotifications);
