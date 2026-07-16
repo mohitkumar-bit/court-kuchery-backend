@@ -9,6 +9,12 @@ const { RtcTokenBuilder, RtcRole } = require("agora-token");
 const { sessions } = require("../utils/sessionBilling");
 const { acquireLock, releaseLock } = require("../utils/lock");
 const { addConsultationDebit } = require("../utils/consultWalletTxn");
+const {
+  notifyLawyerNewRequest,
+  notifyClientAccepted,
+  notifyClientDeclined,
+  notifyLawyerCancelled,
+} = require("../services/consultPushService");
 
 const MIN_BALANCE = 15;
 const BILLING_INTERVAL = 10000; // 10 seconds
@@ -102,7 +108,7 @@ const startConsultation = async (req, res) => {
 
     const room = `session:${session._id}`;
 
-    /* 🔔 NOTIFY LAWYER */
+    /* 🔔 NOTIFY LAWYER (socket + push for background/closed app) */
     io.to(`user:${lawyerId}`).emit("CONSULT_REQUEST", {
       sessionId: session._id,
       userId,
@@ -110,6 +116,15 @@ const startConsultation = async (req, res) => {
       type,
       ratePerMinute: lawyer.ratePerMinute,
     });
+
+    notifyLawyerNewRequest({
+      lawyerId,
+      sessionId: session._id,
+      userId,
+      userName: user.name,
+      type,
+      ratePerMinute: lawyer.ratePerMinute,
+    }).catch((err) => console.error("CONSULT REQUEST PUSH ERR", err));
 
     res.status(201).json({
       message: "Consultation requested",
@@ -153,6 +168,15 @@ const acceptConsultation = async (req, res) => {
       startedAt: session.startedAt,
     });
 
+    const lawyer = await Lawyer.findById(lawyerId).select("name");
+    notifyClientAccepted({
+      userId: session.userId,
+      sessionId: session._id,
+      type: session.type,
+      lawyerName: lawyer?.name,
+      lawyerId,
+    }).catch((err) => console.error("CONSULT ACCEPT PUSH ERR", err));
+
     /* 🔥 START BILLING */
     startBillingInterval(io, session);
 
@@ -192,6 +216,11 @@ const declineConsultation = async (req, res) => {
       sessionId: session._id,
       reason: "Lawyer declined the request",
     });
+
+    notifyClientDeclined({
+      userId: session.userId,
+      sessionId: session._id,
+    }).catch((err) => console.error("CONSULT DECLINE PUSH ERR", err));
 
     /* 🔓 RELEASE LOCKS */
     await releaseLock(`lock:lawyer:${session.lawyerId}`);
@@ -530,6 +559,13 @@ const cancelConsultation = async (req, res) => {
     io.to(`user:${session.lawyerId}`).emit("CONSULT_CANCELLED", {
       sessionId: session._id,
     });
+
+    const user = await User.findById(userId).select("name");
+    notifyLawyerCancelled({
+      lawyerId: session.lawyerId,
+      sessionId: session._id,
+      userName: user?.name,
+    }).catch((err) => console.error("CONSULT CANCEL PUSH ERR", err));
 
     /* 🔓 RELEASE LOCKS */
     await releaseLock(`lock:lawyer:${session.lawyerId}`);

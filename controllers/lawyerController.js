@@ -54,6 +54,7 @@ async function issueLawyerTokens(lawyer) {
       phone: lawyer.phone,
       profileCompleted: lawyer.profileCompleted,
       isOnline: lawyer.isOnline,
+      isVerified: lawyer.isVerified,
       courtType: lawyer.courtType,
       isPhoneVerified: lawyer.isPhoneVerified,
     },
@@ -272,9 +273,21 @@ const updateAvailability = async (req, res) => {
   try {
     const { isOnline } = req.body;
 
-    await Lawyer.findByIdAndUpdate(req.user.id, { isOnline });
+    const lawyer = await Lawyer.findByIdAndUpdate(
+      req.user.id,
+      { isOnline: !!isOnline },
+      { new: true }
+    ).select("-password");
 
-    res.status(200).json({ message: "Availability updated" });
+    if (!lawyer) {
+      return res.status(404).json({ message: "Lawyer not found" });
+    }
+
+    res.status(200).json({
+      message: "Availability updated",
+      isOnline: lawyer.isOnline,
+      lawyer,
+    });
   } catch (error) {
     console.log(error);
 
@@ -311,25 +324,21 @@ const verifyLawyer = async (req, res) => {
 const lawyerLogin = async (req, res) => {
   try {
     const phone = normalizePhone(req.body.phone);
-    const { password } = req.body;
 
-    if (!phone || !password) {
-      return res.status(400).json({ message: "Phone and password required" });
+    if (!phone) {
+      return res.status(400).json({ message: "Valid 10-digit phone number is required" });
     }
 
     const lawyer = await findLawyerByPhone(phone);
 
     if (!lawyer) {
-      return res.status(401).json({ message: "Invalid phone or password" });
+      return res.status(404).json({
+        message: "No account found with this phone number. Please sign up first.",
+      });
     }
 
     if (lawyer.isBlocked) {
       return res.status(403).json({ message: "Account is blocked" });
-    }
-
-    const isMatch = await bcrypt.compare(password, lawyer.password);
-    if (!isMatch) {
-      return res.status(401).json({ message: "Invalid phone or password" });
     }
 
     try {

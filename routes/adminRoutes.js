@@ -3,35 +3,46 @@ const router = express.Router();
 const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
 const {
-    getAdminDashboardStats,
-    getAllLawyersAdmin,
-    toggleLawyerBlock,
-    getAllUsersAdmin,
-    toggleUserBlock,
-    getAllConsultationsAdmin,
-    getRevenueStats,
-    updatePayoutStatus,
-    getAllReviewsAdmin,
-    deleteReviewAdmin,
-    getSystemSettings,
-    updateSystemSettings,
-    getAllPayoutsAdmin,
-    getUnreleasedEarnings,
-    releaseLawyerEarning,
-    getAllEarningsAdmin,
+  adminLogin,
+  adminRefresh,
+  adminLogout,
+} = require("../controllers/adminAuthController");
+const {
+  getAdminDashboardStats,
+  getAllLawyersAdmin,
+  toggleLawyerBlock,
+  getAllUsersAdmin,
+  toggleUserBlock,
+  getAllConsultationsAdmin,
+  getRevenueStats,
+  updatePayoutStatus,
+  getAllReviewsAdmin,
+  deleteReviewAdmin,
+  getSystemSettings,
+  updateSystemSettings,
+  getAllPayoutsAdmin,
+  getUnreleasedEarnings,
+  releaseLawyerEarning,
+  getAllEarningsAdmin,
 } = require("../controllers/adminController");
 const { verifyLawyer } = require("../controllers/lawyerController");
 const {
-    getNotificationTemplates,
-    createNotificationTemplate,
-    updateNotificationTemplate,
-    deleteNotificationTemplate,
-    sendAdminPushNotification,
-    getPushCampaignHistory,
+  getNotificationTemplates,
+  createNotificationTemplate,
+  updateNotificationTemplate,
+  deleteNotificationTemplate,
+  sendAdminPushNotification,
+  getPushCampaignHistory,
 } = require("../controllers/notificationController");
 
+/* Public admin auth (email + password — no OTP) */
+router.post("/login", adminLogin);
+router.post("/refresh", adminRefresh);
+
+/* Protected admin routes */
 router.use(authMiddleware, adminMiddleware);
 
+router.post("/logout", adminLogout);
 router.get("/stats", getAdminDashboardStats);
 router.patch("/payouts/:payoutId/status", updatePayoutStatus);
 router.get("/lawyers", getAllLawyersAdmin);

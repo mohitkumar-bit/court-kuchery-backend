@@ -16,7 +16,10 @@ const chunkArray = (arr, size) => {
  * Send push notifications via Expo Push API.
  * @returns {{ sent: number, failed: number }}
  */
-async function sendExpoPushNotifications(tokens, { title, body, data = {} }) {
+async function sendExpoPushNotifications(
+  tokens,
+  { title, body, data = {}, channelId = "default", priority = "high" }
+) {
   const validTokens = [...new Set(tokens.filter(isExpoPushToken))];
   if (!validTokens.length) {
     return { sent: 0, failed: 0 };
@@ -33,8 +36,8 @@ async function sendExpoPushNotifications(tokens, { title, body, data = {} }) {
       title,
       body,
       data,
-      priority: "high",
-      channelId: "default",
+      priority,
+      channelId,
     }));
 
     try {

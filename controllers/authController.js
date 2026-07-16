@@ -153,24 +153,20 @@ const register = async (req, res) => {
 const login = async (req, res) => {
   try {
     const phone = normalizePhone(req.body.phone);
-    const { password } = req.body;
 
-    if (!phone || !password) {
-      return res.status(400).json({ message: "Phone and password required" });
+    if (!phone) {
+      return res.status(400).json({ message: "Valid 10-digit phone number is required" });
     }
 
     const user = await findUserByPhone(phone);
     if (!user) {
-      return res.status(401).json({ message: "Invalid phone or password" });
+      return res.status(404).json({
+        message: "No account found with this phone number. Please sign up first.",
+      });
     }
 
     if (user.isBlocked) {
       return res.status(403).json({ message: "Account is blocked" });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(401).json({ message: "Invalid phone or password" });
     }
 
     try {
