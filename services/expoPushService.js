@@ -18,7 +18,14 @@ const chunkArray = (arr, size) => {
  */
 async function sendExpoPushNotifications(
   tokens,
-  { title, body, data = {}, channelId = "default", priority = "high" }
+  {
+    title,
+    body,
+    data = {},
+    channelId = "default",
+    priority = "high",
+    categoryId,
+  }
 ) {
   const validTokens = [...new Set(tokens.filter(isExpoPushToken))];
   if (!validTokens.length) {
@@ -38,6 +45,7 @@ async function sendExpoPushNotifications(
       data,
       priority,
       channelId,
+      ...(categoryId ? { categoryId } : {}),
     }));
 
     try {

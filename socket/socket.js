@@ -52,4 +52,17 @@ const initializeSocket = (server, app) => {
   });
 };
 
+const getIO = () => io;
+
+/** Broadcast lawyer online/offline so client apps update without refresh */
+const emitLawyerAvailability = (lawyerId, isOnline) => {
+  if (!io || !lawyerId) return;
+  io.emit("LAWYER_AVAILABILITY", {
+    lawyerId: String(lawyerId),
+    isOnline: !!isOnline,
+  });
+};
+
 module.exports = initializeSocket;
+module.exports.getIO = getIO;
+module.exports.emitLawyerAvailability = emitLawyerAvailability;

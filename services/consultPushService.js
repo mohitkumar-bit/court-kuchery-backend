@@ -14,6 +14,7 @@ async function saveAndPush({
   body,
   data,
   channelId = "consult",
+  categoryId,
 }) {
   try {
     await UserNotification.create({
@@ -45,6 +46,7 @@ async function saveAndPush({
       data,
       channelId,
       priority: "high",
+      categoryId,
     });
   } catch (err) {
     console.error("CONSULT PUSH ERROR 👉", err.message);
@@ -58,6 +60,7 @@ async function notifyLawyerNewRequest({
   sessionId,
   userId,
   userName,
+  userProfileImage,
   type,
   ratePerMinute,
 }) {
@@ -67,11 +70,13 @@ async function notifyLawyerNewRequest({
     lawyerId,
     title: "New consultation request",
     body: `${userName || "A client"} wants a ${consultLabel} consultation`,
+    categoryId: "CONSULT_REQUEST",
     data: {
       type: "CONSULT_REQUEST",
       sessionId: String(sessionId),
       userId: String(userId),
       userName: userName || "Client",
+      userProfileImage: userProfileImage || "",
       consultType: type,
       ratePerMinute: String(ratePerMinute ?? ""),
     },

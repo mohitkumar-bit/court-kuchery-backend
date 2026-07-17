@@ -61,6 +61,11 @@ const userSchema = new mongoose.Schema(
       type: Date,
     },
 
+    profileImage: {
+      type: String,
+      default: null,
+    },
+
     expoPushTokens: [
       {
         token: { type: String, required: true },

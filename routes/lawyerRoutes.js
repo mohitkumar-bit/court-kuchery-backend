@@ -28,11 +28,23 @@ const {
   markLawyerNotificationRead,
   markLawyerNotificationsRead,
 } = require("../controllers/notificationController");
+const { upload } = require("../middleware/uploadMiddleware");
+const {
+  uploadLawyerProfileImage,
+  uploadImage,
+} = require("../controllers/uploadController");
 
 router.post("/register", registerLawyer);
 router.post("/otp/send", sendLawyerSignupOtp);
 router.post("/otp/verify", verifyLawyerSignupOtp);
 router.get("/me", authMiddleware, getLawyerProfile);
+router.post(
+  "/me/profile-image",
+  authMiddleware,
+  upload.single("image"),
+  uploadLawyerProfileImage
+);
+router.post("/upload", authMiddleware, upload.single("image"), uploadImage);
 router.post("/push-token", authMiddleware, registerLawyerPushToken);
 router.get("/notifications", authMiddleware, getLawyerNotifications);
 router.get("/notifications/unread-count", authMiddleware, getLawyerUnreadCount);

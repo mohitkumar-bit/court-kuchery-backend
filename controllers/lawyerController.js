@@ -16,6 +16,7 @@ const {
   verifyOtpCode,
   normalizePhone,
 } = require("../services/otpService");
+const { emitLawyerAvailability } = require("../socket/socket");
 
 const LAWYER_OTP_PURPOSE = "LAWYER_SIGNUP";
 
@@ -44,6 +45,8 @@ async function issueLawyerTokens(lawyer) {
   lawyer.isOnline = true;
   await lawyer.save();
 
+  emitLawyerAvailability(lawyer._id, true);
+
   return {
     accessToken,
     refreshToken,
@@ -57,6 +60,7 @@ async function issueLawyerTokens(lawyer) {
       isVerified: lawyer.isVerified,
       courtType: lawyer.courtType,
       isPhoneVerified: lawyer.isPhoneVerified,
+      profileImage: lawyer.profileImage,
     },
   };
 }
@@ -283,6 +287,8 @@ const updateAvailability = async (req, res) => {
       return res.status(404).json({ message: "Lawyer not found" });
     }
 
+    emitLawyerAvailability(lawyer._id, lawyer.isOnline);
+
     res.status(200).json({
       message: "Availability updated",
       isOnline: lawyer.isOnline,
@@ -372,6 +378,8 @@ const lawyerLogout = async (req, res) => {
       refreshToken: null,
       isOnline: false, // Auto set offline on logout
     });
+
+    emitLawyerAvailability(lawyerId, false);
 
     res.status(200).json({ message: "Logout successful" });
   } catch (error) {
@@ -773,7 +781,7 @@ const completeLawyerProfile = async (req, res) => {
 const updateLawyerProfile = async (req, res) => {
   try {
     const lawyerId = req.user.id;
-    const { name, bio, specialization, ratePerMinute, experienceYears, phone, courtType, location, address, district, state } = req.body;
+    const { name, bio, specialization, ratePerMinute, experienceYears, phone, courtType, location, address, district, state, profileImage } = req.body;
 
     const normalizedCourtType = Array.isArray(courtType)
       ? courtType
@@ -802,6 +810,7 @@ const updateLawyerProfile = async (req, res) => {
     };
     if (normalizedCourtType) updateFields.courtType = normalizedCourtType;
     if (validLocation) updateFields.location = validLocation;
+    if (profileImage !== undefined) updateFields.profileImage = profileImage;
 
     const lawyer = await Lawyer.findByIdAndUpdate(
       lawyerId,
@@ -830,6 +839,7 @@ const updateLawyerProfile = async (req, res) => {
         address: lawyer.address,
         district: lawyer.district,
         state: lawyer.state,
+        profileImage: lawyer.profileImage,
       },
     });
   } catch (error) {

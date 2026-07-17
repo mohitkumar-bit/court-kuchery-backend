@@ -19,10 +19,22 @@ const {
   markClientNotificationRead,
   markClientNotificationsRead,
 } = require("../controllers/notificationController");
+const { upload } = require("../middleware/uploadMiddleware");
+const {
+  uploadClientProfileImage,
+  uploadImage,
+} = require("../controllers/uploadController");
 
 
 router.get("/me", authMiddleware, getProfile);
 router.patch("/me", authMiddleware, updateProfile);
+router.post(
+  "/me/profile-image",
+  authMiddleware,
+  upload.single("image"),
+  uploadClientProfileImage
+);
+router.post("/upload", authMiddleware, upload.single("image"), uploadImage);
 router.patch("/change-password", authMiddleware, changePassword);
 router.post("/push-token", authMiddleware, registerClientPushToken);
 router.get("/notifications", authMiddleware, getClientNotifications);

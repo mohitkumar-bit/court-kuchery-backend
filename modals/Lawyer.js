@@ -58,6 +58,11 @@ const lawyerSchema = new mongoose.Schema(
       type: String,
     },
 
+    profileImage: {
+      type: String,
+      default: null,
+    },
+
     profileCompleted: {
       type: Boolean,
       default: false,

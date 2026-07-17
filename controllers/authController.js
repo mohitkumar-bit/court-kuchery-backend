@@ -44,6 +44,7 @@ async function issueUserTokens(user) {
       phone: user.phone,
       role: user.role,
       isPhoneVerified: user.isPhoneVerified,
+      profileImage: user.profileImage,
     },
   };
 }
@@ -256,7 +257,7 @@ const getProfile = async (req, res) => {
 
 const updateProfile = async (req, res) => {
   try {
-    const { name, phone } = req.body;
+    const { name, phone, profileImage } = req.body;
     const userId = req.user.id;
 
     const update = { name };
@@ -266,6 +267,9 @@ const updateProfile = async (req, res) => {
         return res.status(400).json({ message: "Valid 10-digit phone number is required" });
       }
       update.phone = normalizedPhone;
+    }
+    if (profileImage !== undefined) {
+      update.profileImage = profileImage;
     }
 
     const user = await User.findByIdAndUpdate(userId, update, { new: true });
@@ -282,6 +286,7 @@ const updateProfile = async (req, res) => {
         name: user.name,
         email: user.email,
         phone: user.phone,
+        profileImage: user.profileImage,
       },
     });
   } catch (error) {

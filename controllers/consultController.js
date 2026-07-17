@@ -113,6 +113,7 @@ const startConsultation = async (req, res) => {
       sessionId: session._id,
       userId,
       userName: user.name,
+      userProfileImage: user.profileImage || null,
       type,
       ratePerMinute: lawyer.ratePerMinute,
     });
@@ -122,6 +123,7 @@ const startConsultation = async (req, res) => {
       sessionId: session._id,
       userId,
       userName: user.name,
+      userProfileImage: user.profileImage || null,
       type,
       ratePerMinute: lawyer.ratePerMinute,
     }).catch((err) => console.error("CONSULT REQUEST PUSH ERR", err));
@@ -163,10 +165,13 @@ const acceptConsultation = async (req, res) => {
     await session.save();
 
     const room = `session:${session._id}`;
-    io.to(room).emit("CONSULT_ACCEPTED", {
+    const acceptPayload = {
       sessionId: session._id,
       startedAt: session.startedAt,
-    });
+    };
+    io.to(room).emit("CONSULT_ACCEPTED", acceptPayload);
+    // Also notify client user room — they may not have joined session yet
+    io.to(`user:${session.userId}`).emit("CONSULT_ACCEPTED", acceptPayload);
 
     const lawyer = await Lawyer.findById(lawyerId).select("name");
     notifyClientAccepted({
@@ -212,10 +217,12 @@ const declineConsultation = async (req, res) => {
     await session.save();
 
     const room = `session:${session._id}`;
-    io.to(room).emit("CONSULT_DECLINED", {
+    const declinePayload = {
       sessionId: session._id,
       reason: "Lawyer declined the request",
-    });
+    };
+    io.to(room).emit("CONSULT_DECLINED", declinePayload);
+    io.to(`user:${session.userId}`).emit("CONSULT_DECLINED", declinePayload);
 
     notifyClientDeclined({
       userId: session.userId,
@@ -327,7 +334,6 @@ const startBillingInterval = (io, session) => {
 const endConsultation = async (req, res) => {
   try {
     const io = req.app.get("io");
-
     const { sessionId } = req.params;
     const requesterId = req.user.id;
 
@@ -336,62 +342,33 @@ const endConsultation = async (req, res) => {
       return res.status(404).json({ message: "Consultation session not found" });
     }
 
-    const isClient = session.userId.toString() === requesterId;
-    const isLawyer = session.lawyerId.toString() === requesterId;
+    const isClient = String(session.userId) === String(requesterId);
+    const isLawyer = String(session.lawyerId) === String(requesterId);
 
     if (!isClient && !isLawyer) {
       return res.status(403).json({ message: "Unauthorized" });
     }
 
-    // If session is already ended, just return its summary
-    if (session.status === "ENDED" || session.status === "FORCE_ENDED") {
-      const { commissionAmount, lawyerAmount } = await finalizeEarning(session, io, `session:${sessionId}`);
-      const user = await User.findById(session.userId);
-      return res.status(200).json({
-        message: "Session summary",
-        totalAmount: session.totalAmount,
-        remainingBalance: user?.walletBalance || 0,
-        commission: commissionAmount,
-        lawyerEarning: lawyerAmount,
-      });
+    const { endActiveSession } = require("../services/endConsultSession");
+    const result = await endActiveSession(io, sessionId);
+
+    if (!result.ok) {
+      if (result.code === "NOT_ACTIVE") {
+        return res.status(400).json({
+          message: `Only active sessions can be ended (current: ${result.status})`,
+        });
+      }
+      return res.status(400).json({ message: "Could not end consultation" });
     }
 
-    if (session.status !== "ACTIVE") {
-      return res.status(400).json({ message: "Only active sessions can be ended" });
-    }
-
-    const room = `session:${sessionId}`;
-    const lawyerLockKey = `lock:lawyer:${session.lawyerId}`;
-    const userLockKey = `lock:user:${session.userId}`;
-
-    /* 🔥 STOP BILLING */
-    const activeInterval = sessions.get(sessionId);
-    if (activeInterval) {
-      clearInterval(activeInterval);
-      sessions.delete(sessionId);
-    }
-
-    session.status = "ENDED";
-    session.endedAt = new Date();
-    await session.save();
-
-    // Finalize Earnings with Transaction
-    const { commissionAmount, lawyerAmount } = await finalizeEarning(session, io, room);
-
-    /* 🔓 RELEASE LOCKS */
-    await releaseLock(lawyerLockKey);
-    await releaseLock(userLockKey);
-
-    const user = await User.findById(session.userId);
-
-    res.status(200).json({
-      message: "Consultation ended successfully",
-      totalAmount: session.totalAmount,
-      remainingBalance: user?.walletBalance || 0,
-      commission: commissionAmount,
-      lawyerEarning: lawyerAmount,
+    return res.status(200).json({
+      message: result.message || "Consultation ended successfully",
+      totalAmount: result.totalAmount,
+      remainingBalance: result.remainingBalance,
+      commission: result.commission,
+      lawyerEarning: result.lawyerEarning,
+      durationSeconds: result.durationSeconds,
     });
-
   } catch (error) {
     console.error("CONSULT END ERROR 👉", error);
     res.status(500).json({ message: "Server error" });
@@ -495,15 +472,55 @@ const recoverActiveSessions = async (io) => {
 const getConsultationSession = async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const LawyerEarning = require("../modals/LawyerEarning");
     const session = await ConsultSession.findById(sessionId)
       .populate("userId", "name profileImage")
-      .populate("lawyerId", "name specialization");
+      .populate("lawyerId", "name specialization profileImage");
 
     if (!session) {
       return res.status(404).json({ message: "Session not found" });
     }
 
-    res.status(200).json({ success: true, session });
+    const earning = await LawyerEarning.findOne({ sessionId: session._id });
+    const payload = session.toObject();
+
+    // Duration fallback if not stored
+    if (!payload.durationSeconds && payload.startedAt && payload.endedAt) {
+      payload.durationSeconds = Math.max(
+        0,
+        Math.floor(
+          (new Date(payload.endedAt).getTime() -
+            new Date(payload.startedAt).getTime()) /
+            1000
+        )
+      );
+    }
+
+    const settings = await SystemSettings.findOne();
+    const pct = settings?.commissionPercentage ?? 20;
+
+    let lawyerEarning = earning?.lawyerAmount ?? 0;
+    let commission = earning?.commissionAmount ?? 0;
+
+    if (lawyerEarning <= 0) {
+      const gross =
+        payload.totalAmount > 0
+          ? payload.totalAmount
+          : (payload.ratePerMinute || 0) *
+            (payload.durationSeconds > 0
+              ? Math.ceil(payload.durationSeconds / 60)
+              : 0);
+      if (gross > 0) {
+        commission = (gross * pct) / 100;
+        lawyerEarning = gross - commission;
+      }
+    }
+
+    payload.lawyerEarning = lawyerEarning;
+    payload.commission = commission;
+    payload.earningStatus = earning?.status || null;
+
+    res.status(200).json({ success: true, session: payload });
   } catch (error) {
     console.error("GET CONSULT SESSION ERROR 👉", error);
     res.status(500).json({ message: "Server error" });
@@ -513,11 +530,58 @@ const getConsultationSession = async (req, res) => {
 const getLawyerConsultations = async (req, res) => {
   try {
     const lawyerId = req.user.id;
+    const LawyerEarning = require("../modals/LawyerEarning");
     const consultations = await ConsultSession.find({ lawyerId })
       .populate("userId", "name profileImage")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
-    res.status(200).json({ success: true, consultations });
+    const ids = consultations.map((c) => c._id);
+    const earnings = await LawyerEarning.find({ sessionId: { $in: ids } }).lean();
+    const bySession = new Map(
+      earnings.map((e) => [String(e.sessionId), e])
+    );
+
+    const settings = await SystemSettings.findOne();
+    const pct = settings?.commissionPercentage ?? 20;
+
+    const enriched = consultations.map((c) => {
+      const earning = bySession.get(String(c._id));
+      let durationSeconds = c.durationSeconds || 0;
+      if (!durationSeconds && c.startedAt && c.endedAt) {
+        durationSeconds = Math.max(
+          0,
+          Math.floor(
+            (new Date(c.endedAt).getTime() - new Date(c.startedAt).getTime()) /
+              1000
+          )
+        );
+      }
+
+      let lawyerEarning = earning?.lawyerAmount ?? 0;
+      let commission = earning?.commissionAmount ?? 0;
+
+      if (lawyerEarning <= 0) {
+        const gross =
+          c.totalAmount > 0
+            ? c.totalAmount
+            : (c.ratePerMinute || 0) *
+              (durationSeconds > 0 ? Math.ceil(durationSeconds / 60) : 0);
+        if (gross > 0) {
+          commission = (gross * pct) / 100;
+          lawyerEarning = gross - commission;
+        }
+      }
+
+      return {
+        ...c,
+        durationSeconds,
+        lawyerEarning,
+        commission,
+      };
+    });
+
+    res.status(200).json({ success: true, consultations: enriched });
   } catch (error) {
     console.error("GET LAWYER CONSULTATIONS ERROR 👉", error);
     res.status(500).json({ message: "Server error" });
