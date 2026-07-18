@@ -34,9 +34,14 @@ const {
   uploadImage,
 } = require("../controllers/uploadController");
 
+/* Public auth */
 router.post("/register", registerLawyer);
 router.post("/otp/send", sendLawyerSignupOtp);
 router.post("/otp/verify", verifyLawyerSignupOtp);
+router.post("/login", lawyerLogin);
+router.post("/refresh", refreshLawyerAccessToken);
+
+/* Authenticated lawyer routes — must be before /:lawyerId */
 router.get("/me", authMiddleware, getLawyerProfile);
 router.post(
   "/me/profile-image",
@@ -53,17 +58,17 @@ router.patch("/notifications/:notificationId/read", authMiddleware, markLawyerNo
 router.patch("/me/update", authMiddleware, updateLawyerProfile);
 router.patch("/change-password", authMiddleware, changeLawyerPassword);
 router.get("/stats", authMiddleware, getLawyerStats);
-router.get("/", getLawyers);
-router.get("/:lawyerId", getLawyerById);
-router.patch("/availability", authMiddleware, updateAvailability);
-router.patch("/:lawyerId/verify", authMiddleware, adminMiddleware, verifyLawyer);
-router.post("/login", lawyerLogin);
-router.post("/logout", authMiddleware, lawyerLogout);
-router.post("/refresh", refreshLawyerAccessToken);
 router.get("/payouts", authMiddleware, getLawyerPayouts);
 router.post("/withdraw", authMiddleware, withdrawFunds);
 router.post("/complete-profile", authMiddleware, completeLawyerProfile);
+router.patch("/availability", authMiddleware, updateAvailability);
+router.post("/logout", authMiddleware, lawyerLogout);
 
+/* Public list */
+router.get("/", getLawyers);
 
+/* Parameterized routes last */
+router.get("/:lawyerId", getLawyerById);
+router.patch("/:lawyerId/verify", authMiddleware, adminMiddleware, verifyLawyer);
 
 module.exports = router;

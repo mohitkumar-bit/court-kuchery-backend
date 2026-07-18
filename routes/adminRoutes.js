@@ -23,6 +23,7 @@ const {
   getAllPayoutsAdmin,
   getUnreleasedEarnings,
   releaseLawyerEarning,
+  releaseAllLawyerEarnings,
   getAllEarningsAdmin,
 } = require("../controllers/adminController");
 const { verifyLawyer } = require("../controllers/lawyerController");
@@ -55,6 +56,7 @@ router.get("/revenue-stats", getRevenueStats);
 router.get("/payouts", getAllPayoutsAdmin);
 router.get("/earnings/unreleased", getUnreleasedEarnings);
 router.get("/earnings/all", getAllEarningsAdmin);
+router.patch("/earnings/lawyer/:lawyerId/release-all", releaseAllLawyerEarnings);
 router.patch("/earnings/:earningId/release", releaseLawyerEarning);
 router.get("/reviews", getAllReviewsAdmin);
 router.delete("/reviews/:reviewId", deleteReviewAdmin);

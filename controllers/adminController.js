@@ -211,9 +211,43 @@ const getAllConsultationsAdmin = async (req, res) => {
         const sessions = await ConsultSession.find()
             .populate("userId", "name email")
             .populate("lawyerId", "name email")
-            .sort({ createdAt: -1 });
-        res.status(200).json({ success: true, sessions });
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const ids = sessions.map((s) => s._id);
+        const earnings = await LawyerEarning.find({
+            sessionId: { $in: ids },
+        }).lean();
+        const bySession = new Map(
+            earnings.map((e) => [String(e.sessionId), e])
+        );
+
+        const settings = await SystemSettings.findOne();
+        const pct = settings?.commissionPercentage ?? 20;
+
+        const enriched = sessions.map((s) => {
+            const earning = bySession.get(String(s._id));
+            const totalAmount = s.totalAmount || 0;
+            let commissionAmount = earning?.commissionAmount;
+            let lawyerAmount = earning?.lawyerAmount;
+
+            if (commissionAmount == null && totalAmount > 0) {
+                commissionAmount = (totalAmount * pct) / 100;
+                lawyerAmount = totalAmount - commissionAmount;
+            }
+
+            return {
+                ...s,
+                totalAmount,
+                commissionAmount: commissionAmount ?? 0,
+                lawyerAmount: lawyerAmount ?? 0,
+                adminCommission: commissionAmount ?? 0,
+            };
+        });
+
+        res.status(200).json({ success: true, sessions: enriched });
     } catch (error) {
+        console.error("GET CONSULTATIONS ADMIN ERROR 👉", error);
         res.status(500).json({ message: "Server error" });
     }
 };
@@ -498,35 +532,100 @@ const getUnreleasedEarnings = async (req, res) => {
 };
 
 const releaseLawyerEarning = async (req, res) => {
+    const maxRetries = 3;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        const mongoSession = await mongoose.startSession();
+        mongoSession.startTransaction();
+        try {
+            const { earningId } = req.params;
+
+            const earning = await LawyerEarning.findById(earningId).session(mongoSession);
+            if (!earning) {
+                await mongoSession.abortTransaction();
+                return res.status(404).json({ message: "Earning record not found" });
+            }
+
+            if (earning.status !== "PENDING") {
+                await mongoSession.abortTransaction();
+                return res.status(400).json({ message: `Earning is already ${earning.status}` });
+            }
+
+            earning.status = "RELEASED";
+            await earning.save({ session: mongoSession });
+
+            const updatedLawyer = await Lawyer.findByIdAndUpdate(
+                earning.lawyerId,
+                {
+                    $inc: {
+                        pendingBalance: -earning.lawyerAmount,
+                        availableBalance: earning.lawyerAmount,
+                        totalEarnings: earning.lawyerAmount,
+                    },
+                },
+                { session: mongoSession, new: true }
+            );
+
+            if (!updatedLawyer) {
+                throw new Error("Lawyer not found during fund release");
+            }
+
+            await mongoSession.commitTransaction();
+            return res.status(200).json({ success: true, message: "Earning released successfully" });
+        } catch (error) {
+            await mongoSession.abortTransaction();
+            const isTransient =
+                error?.code === 112 ||
+                error?.errorLabels?.includes?.("TransientTransactionError") ||
+                error?.errorLabelSet?.has?.("TransientTransactionError");
+
+            if (isTransient && attempt < maxRetries) {
+                await new Promise((r) => setTimeout(r, 50 * attempt));
+                continue;
+            }
+
+            console.error("RELEASE EARNING ERROR 👉", error);
+            return res.status(500).json({ message: "Server error" });
+        } finally {
+            mongoSession.endSession();
+        }
+    }
+};
+
+/** Release all PENDING earnings for one lawyer in a single transaction */
+const releaseAllLawyerEarnings = async (req, res) => {
+    const { lawyerId } = req.params;
     const mongoSession = await mongoose.startSession();
     mongoSession.startTransaction();
+
     try {
-        const { earningId } = req.params;
+        const pending = await LawyerEarning.find({
+            lawyerId,
+            status: "PENDING",
+        }).session(mongoSession);
 
-        const earning = await LawyerEarning.findById(earningId).session(mongoSession);
-        if (!earning) {
+        if (!pending.length) {
             await mongoSession.abortTransaction();
-            return res.status(404).json({ message: "Earning record not found" });
+            return res.status(404).json({ message: "No pending earnings for this lawyer" });
         }
 
-        if (earning.status !== "PENDING") {
-            await mongoSession.abortTransaction();
-            return res.status(400).json({ message: `Earning is already ${earning.status}` });
-        }
+        const totalAmount = pending.reduce((sum, e) => sum + (e.lawyerAmount || 0), 0);
+        const ids = pending.map((e) => e._id);
 
-        // 1. Update Earning status
-        earning.status = "RELEASED";
-        await earning.save({ session: mongoSession });
+        await LawyerEarning.updateMany(
+            { _id: { $in: ids }, status: "PENDING" },
+            { $set: { status: "RELEASED" } },
+            { session: mongoSession }
+        );
 
-        // 2. Move funds from pending to available
         const updatedLawyer = await Lawyer.findByIdAndUpdate(
-            earning.lawyerId,
+            lawyerId,
             {
                 $inc: {
-                    pendingBalance: -earning.lawyerAmount,
-                    availableBalance: earning.lawyerAmount,
-                    totalEarnings: earning.lawyerAmount
-                }
+                    pendingBalance: -totalAmount,
+                    availableBalance: totalAmount,
+                    totalEarnings: totalAmount,
+                },
             },
             { session: mongoSession, new: true }
         );
@@ -536,11 +635,16 @@ const releaseLawyerEarning = async (req, res) => {
         }
 
         await mongoSession.commitTransaction();
-        res.status(200).json({ success: true, message: "Earning released successfully" });
+        return res.status(200).json({
+            success: true,
+            message: `Released ${ids.length} earnings (₹${totalAmount.toFixed(2)})`,
+            count: ids.length,
+            amount: totalAmount,
+        });
     } catch (error) {
         await mongoSession.abortTransaction();
-        console.error("RELEASE EARNING ERROR 👉", error);
-        res.status(500).json({ message: "Server error" });
+        console.error("RELEASE ALL EARNINGS ERROR 👉", error);
+        return res.status(500).json({ message: "Server error" });
     } finally {
         mongoSession.endSession();
     }
@@ -577,5 +681,6 @@ module.exports = {
     updateSystemSettings,
     getUnreleasedEarnings,
     releaseLawyerEarning,
+    releaseAllLawyerEarnings,
     getAllEarningsAdmin,
 };

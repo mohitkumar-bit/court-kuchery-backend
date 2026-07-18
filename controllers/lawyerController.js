@@ -68,9 +68,9 @@ async function issueLawyerTokens(lawyer) {
 /* REGISTER LAWYER */
 const registerLawyer = async (req, res) => {
   try {
-    const { name, email, phone, password } = req.body;
+    const { name, email, phone } = req.body;
 
-    if (!name || !email || !password || !phone) {
+    if (!name || !email || !phone) {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
@@ -120,7 +120,10 @@ const registerLawyer = async (req, res) => {
       return res.status(400).json({ message: "Lawyer already exists" });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(
+      require("crypto").randomBytes(32).toString("hex"),
+      10
+    );
 
     const lawyer = await Lawyer.create({
       name,
@@ -258,17 +261,51 @@ const verifyLawyerSignupOtp = async (req, res) => {
 /* GET LAWYER PROFILE */
 const getLawyerById = async (req, res) => {
   try {
-    const lawyer = await Lawyer.findById(req.params.lawyerId).select(
-      "-password"
+    const { lawyerId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(lawyerId)) {
+      return res.status(404).json({ message: "Lawyer not found" });
+    }
+
+    const lawyer = await Lawyer.findById(lawyerId).select(
+      "-password -bankDetails -refreshToken -expoPushTokens"
     );
 
     if (!lawyer || !lawyer.isVerified) {
       return res.status(404).json({ message: "Lawyer not found" });
     }
 
-    res.status(200).json({ lawyer });
+    const ConsultSession = require("../modals/consultSession");
+    const sessionStats = await ConsultSession.aggregate([
+      {
+        $match: {
+          lawyerId: lawyer._id,
+          status: { $in: ["ENDED", "FORCE_ENDED"] },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          totalSessions: { $sum: 1 },
+          totalSeconds: { $sum: { $ifNull: ["$durationSeconds", 0] } },
+        },
+      },
+    ]);
+
+    const stats = sessionStats[0] || { totalSessions: 0, totalSeconds: 0 };
+    const totalConsultMinutes = Math.round((stats.totalSeconds || 0) / 60);
+
+    const payload = lawyer.toObject();
+    payload.stats = {
+      totalConsultMinutes,
+      totalSessions: stats.totalSessions || 0,
+      totalReviews: lawyer.totalReviews || 0,
+      rating: lawyer.rating || 0,
+    };
+
+    res.status(200).json({ lawyer: payload });
   } catch (error) {
-    res.status(500).json({ message: "Server errorrrr" });
+    console.error("GET LAWYER BY ID ERROR 👉", error);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -403,6 +440,7 @@ const getLawyers = async (req, res) => {
       longitude,
       district,
       state,
+      search,
     } = req.query;
 
     let lawyers = [];
@@ -437,6 +475,37 @@ const getLawyers = async (req, res) => {
         if (maxPrice) filterMatch.ratePerMinute.$lte = Number(maxPrice);
       }
       if (onlineOnly === "true") filterMatch.isOnline = true;
+
+      // Search by lawyer name, city/district/state/address, or case type
+      const q = String(search || "").trim();
+      if (q) {
+        const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regex = new RegExp(escaped, "i");
+        const knownSpecs = [
+          "criminal",
+          "family",
+          "corporate",
+          "civil",
+          "property",
+          "cyber",
+        ];
+        const lower = q.toLowerCase();
+        const matchedSpecs = knownSpecs.filter(
+          (s) => lower.includes(s) || s.includes(lower)
+        );
+
+        filterMatch.$or = [
+          { name: regex },
+          { district: regex },
+          { state: regex },
+          { address: regex },
+          { specialization: regex },
+          ...(matchedSpecs.length
+            ? [{ specialization: { $in: matchedSpecs } }]
+            : []),
+        ];
+      }
+
       if (Object.keys(filterMatch).length > 0) p.push({ $match: filterMatch });
 
       // Default sort for non-proximity
