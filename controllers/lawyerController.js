@@ -775,11 +775,30 @@ const withdrawFunds = async (req, res) => {
 
 const getLawyerPayouts = async (req, res) => {
   try {
-    const payouts = await Payout.find({ lawyerId: req.user.id })
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .lean();
-    res.status(200).json({ success: true, payouts });
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 5));
+    const skip = (page - 1) * limit;
+    const lawyerId = req.user.id;
+
+    const [total, payouts, pendingDoc] = await Promise.all([
+      Payout.countDocuments({ lawyerId }),
+      Payout.find({ lawyerId })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Payout.findOne({ lawyerId, status: "PENDING" }).select("_id").lean(),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      payouts,
+      page,
+      limit,
+      total,
+      hasMore: skip + payouts.length < total,
+      hasPending: !!pendingDoc,
+    });
   } catch (error) {
     console.error("GET LAWYER PAYOUTS ERROR 👉", error);
     res.status(500).json({ message: "Server error" });

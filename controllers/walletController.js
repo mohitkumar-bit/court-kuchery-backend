@@ -57,22 +57,87 @@ const getWalletTransactions = async (req, res) => {
 
     if (isLawyer) {
       const LawyerEarning = require("../modals/LawyerEarning");
+      const ConsultSession = require("../modals/consultSession");
+      // Ensure User model is registered for populate
+      require("../modals/authModal");
+
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 5));
+      const skip = (page - 1) * limit;
+
+      const total = await LawyerEarning.countDocuments({ lawyerId: id });
       const earnings = await LawyerEarning.find({ lawyerId: id })
         .sort({ createdAt: -1 })
-        .limit(50)
+        .skip(skip)
+        .limit(limit)
         .lean();
 
-      const transactions = earnings.map((e) => ({
-        _id: e._id,
-        type: "CREDIT",
-        amount: e.lawyerAmount || 0,
-        reason: "CONSULTATION",
-        referenceId: String(e.sessionId),
-        status: e.status,
-        createdAt: e.createdAt,
-      }));
+      const sessionIds = earnings
+        .map((e) => e.sessionId)
+        .filter(Boolean);
 
-      return res.status(200).json({ transactions });
+      const sessions = sessionIds.length
+        ? await ConsultSession.find({ _id: { $in: sessionIds } })
+            .select("userId type startedAt endedAt durationSeconds")
+            .populate({ path: "userId", model: "User", select: "name phone email" })
+            .lean()
+        : [];
+
+      // Fallback: if populate failed, resolve names directly
+      const missingUserIds = sessions
+        .filter((s) => s.userId && typeof s.userId !== "object")
+        .map((s) => s.userId);
+      if (missingUserIds.length) {
+        const users = await User.find({ _id: { $in: missingUserIds } })
+          .select("name phone email")
+          .lean();
+        const userMap = new Map(users.map((u) => [String(u._id), u]));
+        for (const s of sessions) {
+          if (s.userId && typeof s.userId !== "object") {
+            s.userId = userMap.get(String(s.userId)) || s.userId;
+          }
+        }
+      }
+
+      const sessionMap = new Map(
+        sessions.map((s) => [String(s._id), s])
+      );
+
+      const transactions = earnings.map((e) => {
+        const session = sessionMap.get(String(e.sessionId)) || null;
+        const client =
+          session?.userId && typeof session.userId === "object"
+            ? session.userId
+            : null;
+        const clientName =
+          (client?.name && String(client.name).trim()) ||
+          (client?.phone && String(client.phone).trim()) ||
+          (client?.email && String(client.email).trim()) ||
+          "Client";
+        const durationSeconds = session?.durationSeconds ?? 0;
+
+        return {
+          _id: e._id,
+          type: "CREDIT",
+          amount: e.lawyerAmount || 0,
+          reason: "CONSULTATION",
+          referenceId: String(e.sessionId),
+          status: e.status,
+          createdAt: e.createdAt,
+          clientName,
+          consultType: session?.type || null,
+          startedAt: session?.startedAt || e.createdAt,
+          durationSeconds,
+        };
+      });
+
+      return res.status(200).json({
+        transactions,
+        page,
+        limit,
+        total,
+        hasMore: skip + transactions.length < total,
+      });
     }
 
     const transactions = await getAggregatedWalletTransactions(id);

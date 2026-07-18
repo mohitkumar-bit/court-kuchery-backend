@@ -3,7 +3,7 @@ const { endActiveSession } = require("../services/endConsultSession");
 
 /** Pending auto-ends after disconnect: key = `${userId}:${sessionId}` */
 const pendingAbandon = new Map();
-const DISCONNECT_GRACE_MS = 8000;
+const DISCONNECT_GRACE_MS = 60000;
 
 function abandonKey(userId, sessionId) {
   return `${userId}:${sessionId}`;
